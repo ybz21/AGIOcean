@@ -2,17 +2,7 @@ package models
 
 import (
 	"net/http"
-
-	"github.com/gorilla/websocket"
 )
-
-type Worker struct {
-	ID         string `json:"id"`
-	IP         string `json:"ip"`
-	Online     bool   `json:"online"`
-	ModelName  string `json:"modelName"`
-	Connection *websocket.Conn
-}
 
 type RequestInfo struct {
 	RequestID string      `json:"requestId"`

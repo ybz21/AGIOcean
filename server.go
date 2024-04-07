@@ -15,15 +15,12 @@ import (
 	"github.com/ybz21/AGIOcean/models"
 )
 
-const TUNNEL_PREFIX = "/agi-ocean"
+const TUNNEL_PREFIX = "/proxy"
 
-var upgrader = websocket.Upgrader{}          // use default options
-var clients = make(map[*websocket.Conn]bool) // connected clients
-var workers = make([]models.Worker, 0)
-var responseInfoChannel = make(chan models.ResponseInfo) // broadcast channel
+var upgrader = websocket.Upgrader{}
+var aliveWorkers = make([]models.Worker, 0)
+var responseInfoChannel = make(chan models.ResponseInfo, 10000)
 
-// HandleWebSocket connects to the WebSocket server.
-// func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 func webSocketHandler(c *gin.Context) {
 	conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
@@ -32,20 +29,23 @@ func webSocketHandler(c *gin.Context) {
 	}
 	defer conn.Close()
 
-	clients[conn] = true
-	workers = append(workers, models.Worker{
+	worker := models.Worker{
 		ID:         uuid.New().String(),
 		IP:         c.ClientIP(),
 		Online:     true,
 		ModelName:  "default",
 		Connection: conn,
-	})
+	}
+
+	aliveWorkers = append(aliveWorkers, worker)
 
 	for {
 		_, message, err := conn.ReadMessage()
 		if err != nil {
 			fmt.Println("Error during message reading:", err)
-			delete(clients, conn)
+			//delete(aliveWorkers, worker)
+			// todo: delete
+
 			conn.Close()
 			break
 		}
@@ -111,10 +111,14 @@ func tunnelHandler(c *gin.Context) {
 					response = resp
 					genResponse(c, response)
 					return
+				} else {
+					// 放回队列
+					responseInfoChannel <- resp
 				}
-			default:
-				// 设置超时时间，避免无限期阻塞
-				time.Sleep(1 * time.Second)
+
+			case <-time.After(500 * time.Millisecond): // 避免阻塞，定期检查队列
+				// 如果没有消息，休眠一段时间
+				fmt.Println("timeout")
 			}
 		}
 
@@ -128,7 +132,7 @@ func genResponse(c *gin.Context, responseInfo models.ResponseInfo) {
 	for k, v := range responseInfo.Header {
 		c.Header(k, v[0])
 	}
-	fmt.Println("=======")
+
 	var body map[string]interface{}
 	err := json.Unmarshal(responseInfo.Body, &body)
 	if err != nil {
@@ -140,22 +144,31 @@ func genResponse(c *gin.Context, responseInfo models.ResponseInfo) {
 	}
 	c.JSON(responseInfo.StatusCode, body)
 }
+
 func getWorker() (models.Worker, error) {
-	if len(workers) > 0 {
-		return workers[0], nil
+	if len(aliveWorkers) > 0 {
+		for _, worker := range aliveWorkers {
+			//if worker.Ability == "default" {
+			//	return worker, nil
+			//}you
+			fmt.Println(worker.Abilities)
+		}
+		return aliveWorkers[0], nil
 	}
+
 	return models.Worker{}, fmt.Errorf("no worker")
 }
 
 func listWorkersHandler(c *gin.Context) {
-	c.JSON(http.StatusOK, workers)
+	c.JSON(http.StatusOK, aliveWorkers)
 }
 
 func main() {
 	r := gin.Default()
 	r.Any(fmt.Sprintf("%s/*path", TUNNEL_PREFIX), tunnelHandler)
 	r.GET("/ws", webSocketHandler)
-	r.GET("/workers", listWorkersHandler)
+
+	r.GET("/api/v1/workers", listWorkersHandler)
 
 	r.Run(":8080")
 }
